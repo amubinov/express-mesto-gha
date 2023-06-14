@@ -1,113 +1,104 @@
-const cardModel = require('../models/card');
+const httpConstants = require('http2').constants;
+const Card = require('../models/card');
 
-const {
-  // eslint-disable-next-line max-len
-  messageNotCard, messageDataError, messageNotFound, messageServerError, CREATED, BAD_REQUEST, NOT_FOUND, SERVER_ERROR,
-} = require('../utils/responses');
-
-const getCards = async (req, res) => {
-  try {
-    const cards = await cardModel.find({});
-    res.send(cards);
-  } catch (error) {
-    res.status(SERVER_ERROR).send({
-      message: messageServerError,
-      error: error.message,
-      stack: error.stack,
-    });
-  }
+const getCards = (req, res, next) => {
+  Card
+    .find({})
+    .then((cards) => {
+      res.status(200).send(cards);
+    })
+    .catch(next);
 };
 
-// eslint-disable-next-line consistent-return
-const createCard = async (req, res) => {
-  try {
-    const card = await cardModel.create({ ...req.body, owner: req.user._id });
-    res.status(CREATED).send({ data: card });
-  } catch (error) {
-    if (error.name === 'ValidationError') {
-      return res.status(BAD_REQUEST).send({ message: `${messageDataError} при создании карточки` });
-    }
+const createCard = (req, res, next) => {
+  const { name, link } = req.body;
+  const id = req.user._id;
 
-    res.status(SERVER_ERROR).send({
-      message: messageServerError,
-      error: error.message,
-      stack: error.stack,
+  return Card.create({ name, link, owner: id })
+    .then((cards) => {
+      res.status(201).send(cards);
+    })
+    .catch((err) => {
+      if (err.name === 'ValidationError') {
+        return res.status(httpConstants.HTTP_STATUS_BAD_REQUEST).send({ message: 'Переданы некорректные данные при создании карточки' });
+      }
+      return next();
     });
-  }
 };
 
-// eslint-disable-next-line consistent-return
-const deleteCard = async (req, res) => {
-  try {
-    const deletedCard = await cardModel.findByIdAndDelete(req.params.cardId).orFail(new Error('DocumentNotFoundError'));
-    res.send({ data: deletedCard });
-  } catch (error) {
-    if (error.name === 'CastError') {
-      return res.status(BAD_REQUEST).send({ message: `${messageNotCard}` });
-    } if (error.name === 'Error') {
-      return res.status(NOT_FOUND).send({ message: `${messageNotFound}` });
-    }
-
-    res.status(SERVER_ERROR).send({
-      message: messageServerError,
-      error: error.message,
-      stack: error.stack,
+const likeCardById = (req, res, next) => {
+  Card.findByIdAndUpdate(
+    req.params.id,
+    { $addToSet: { likes: req.user._id } },
+    { new: true },
+  )
+    .then((card) => {
+      if (!card) {
+        return res.status(httpConstants.HTTP_STATUS_NOT_FOUND)
+          .send({ message: 'Такой карточки нет' });
+      }
+      return res.status(200).send(card);
+    })
+    .catch((err) => {
+      if (err.name === 'CastError') {
+        return res.status(httpConstants.HTTP_STATUS_BAD_REQUEST)
+          .send({ message: 'Некорректный id карточки' });
+      }
+      return next();
     });
-  }
 };
 
-// eslint-disable-next-line consistent-return
-const likeCard = async (req, res) => {
-  try {
-    const licked = await cardModel.findByIdAndUpdate(
-      req.params.cardId,
-      { $addToSet: { likes: req.user._id } },
-      { new: true },
-    ).orFail(new Error('NoValidId'));
-    res.send({ data: licked });
-  } catch (error) {
-    if (error.message === 'NoValidId' || error.name === 'Error') {
-      return res.status(NOT_FOUND).send({ message: messageNotFound });
-    } if (error.name === 'CastError') {
-      return res.status(BAD_REQUEST).send({ message: messageDataError });
-    }
-
-    res.status(SERVER_ERROR).send({
-      message: messageServerError,
-      error: error.message,
-      stack: error.stack,
+const dislikeCardById = (req, res, next) => {
+  Card.findByIdAndUpdate(
+    req.params.id,
+    { $pull: { likes: req.user._id } },
+    { new: true },
+  )
+    .then((card) => {
+      if (!card) {
+        return res.status(httpConstants.HTTP_STATUS_NOT_FOUND).send({ message: 'Такой карточки нет' });
+      }
+      return res.status(200).send(card);
+    })
+    .catch((err) => {
+      if (err.name === 'CastError') {
+        return res.status(httpConstants.HTTP_STATUS_BAD_REQUEST)
+          .send({ message: 'Некорректный id карточки' });
+      }
+      return next();
     });
-  }
 };
 
-// eslint-disable-next-line consistent-return
-const dislikeCard = async (req, res) => {
-  try {
-    const disliked = await cardModel.findByIdAndUpdate(
-      req.params.cardId,
-      { $pull: { likes: req.user._id } },
-      { new: true },
-    ).orFail(new Error('NoValidId'));
-    res.send({ data: disliked });
-  } catch (error) {
-    if (error.message === 'NoValidId' || error.name === 'Error') {
-      return res.status(NOT_FOUND).send({ message: messageNotFound });
-    } if (error.name === 'CastError') {
-      return res.status(BAD_REQUEST).send({ message: messageDataError });
-    }
+const deleteCardById = (req, res, next) => {
+  const id = req.user._id;
 
-    res.status(SERVER_ERROR).send({
-      message: messageServerError,
-      error: error.message,
-      stack: error.stack,
+  return Card.findById(req.params.id)
+    .then((card) => {
+      if (!card) {
+        return res.status(httpConstants.HTTP_STATUS_NOT_FOUND)
+          .send({ message: 'Такой карточки нет' });
+      }
+      if (card.owner.toString() === id) {
+        return Card.findByIdAndRemove(req.params.id)
+          .then((removeCard) => res.status(200).send(removeCard))
+          .catch(next);
+      }
+      return res.status(httpConstants.HTTP_STATUS_BAD_REQUEST)
+        .send({ message: 'Можно удалять только свои карточки' });
+    })
+    .catch((err) => {
+      if (err.name === 'CastError') {
+        return res.status(httpConstants.HTTP_STATUS_BAD_REQUEST)
+          .send({ message: 'Некорректный id карточки' });
+      }
+      return next();
     });
-  }
 };
 
 module.exports = {
   getCards,
   createCard,
-  deleteCard,
-  likeCard,
-  dislikeCard,
+  likeCardById,
+  dislikeCardById,
+  deleteCardById,
 };
